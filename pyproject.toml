@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eng-dna"
+version = "0.1.0"
+description = "Engineering Memory / Design Lineage CLI"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{name = "Eng DNA"}]
+dependencies = [
+    "typer>=0.9",
+]
+
+[project.scripts]
+edna = "eng_dna.cli:app"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = [
+    "tests",
+]
+pythonpath = [
+    "src",
+]

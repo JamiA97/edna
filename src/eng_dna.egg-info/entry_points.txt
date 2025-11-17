@@ -1,0 +1,2 @@
+[console_scripts]
+edna = eng_dna.cli:app

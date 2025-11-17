@@ -1,0 +1,7 @@
+Ideas to improve edna  
+
+1. Currently we have to start a virtual environment (venv) to get the program to work. Can we just have to program run using bash without the .venv
+2. We should be able to easily see all the 'projects' that are in the db.
+3. Have an 'edna' command which lists files in a folder but ignores any '.edna' files, like 'ls --ignore="*.edna"' 
+
+

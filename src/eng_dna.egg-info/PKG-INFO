@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: eng-dna
+Version: 0.1.0
+Summary: Engineering Memory / Design Lineage CLI
+Author: Eng DNA
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: typer>=0.9
+
+# eng-dna
+
+`eng-dna` (CLI: `edna`) is a lightweight engineering memory store as described in `Background.md`. It keeps a SQLite lineage database plus DNA tokens embedded in files or neighbouring sidecars.
+
+See `USAGE.md` for command examples.
