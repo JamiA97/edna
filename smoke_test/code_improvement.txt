@@ -1,7 +1,67 @@
 Ideas to improve edna  
 
-1. Currently we have to start a virtual environment (venv) to get the program to work. Can we just have to program run using bash without the .venv
-2. We should be able to easily see all the 'projects' that are in the db.
-3. Have an 'edna' command which lists files in a folder but ignores any '.edna' files, like 'ls --ignore="*.edna"' 
+This document outlines a prioritized improvement roadmap for `eng-dna`. These suggestions are designed to maintain the "lightweight, local-first" philosophy while addressing the practical friction points of using the system in a real engineering team.
 
+### 1. Visual Lineage Export (`edna graph`)
+**The Improvement:**
+Currently, `edna trace` produces a text-based tree in the terminal. While functional, this becomes difficult to parse for complex lineages with multiple parents or deep hierarchies. The improvement is to add a command that exports the graph to a standard visual format (Mermaid.js or Graphviz DOT).
 
+* **Why it matters:** Visuals provide the "wow factor" and immediate cognitive understanding of complex dependencies.
+* **Implementation Note:** Mermaid.js is ideal because it is text-based and renders natively in GitHub Markdown and many editors (VS Code).
+
+> **User Story:**
+> "As a Technical Lead reviewing a simulation result, I want to generate a visual flow diagram of the file's lineage so I can instantly see which geometry version and which boundary condition scripts contributed to this result, without reading through log text."
+
+---
+
+### 2. Portable Lineage (Team Sync)
+**The Improvement:**
+Currently, the system relies on a local SQLite file (`eng_dna.db`). If a user commits a file to Git and a colleague pulls it, the colleague gets the file (and potentially the `.edna` sidecar), but they lack the rich history, notes, and relationships stored in the original user's local database.
+We need an `export` and `import` mechanism to share this "Knowledge Graph" via Git.
+
+* **Why it matters:** This solves the "silo" problem without requiring a central server or cloud dependency. It allows the lineage metadata to travel alongside the actual data.
+* **Implementation Note:** `edna export --project <id>` could generate a `lineage.json` file to be checked into version control.
+
+> **User Story:**
+> "As a Design Engineer handing off a project, I want to export the lineage history of my design files into a JSON file and commit it to the repo, so that my colleague can import it and immediately query the history of the files on their own machine."
+
+---
+
+### 3. "Snapshot" vs. "Work-in-Progress" Modes
+**The Improvement:**
+Currently, `eng-dna` triggers version logic whenever a hash mismatch occurs. In rapid iteration (e.g., tweaking a script 20 times an hour), this could spam the database with 20 insignificant versions.
+We should introduce a "WIP" (Work in Progress) state where the hash can update without creating a new graph node, versus a "Snapshot" state where a new immutable version is recorded.
+
+* **Why it matters:** It reduces noise. Engineers only care about *significant* versions (e.g., "Run 1," "Run 2"), not every "File Save" in between.
+
+> **User Story:**
+> "As an Analyst iterating on a script, I want to update the file hash in the database without creating a new version number, so that I can save my work frequently but only 'snapshot' the lineage when I achieve a result worth keeping."
+
+---
+
+### 4. Database Layer Hardening (SQLAlchemy Core)
+**The Improvement:**
+The current implementation uses raw SQL strings for database operations. This is brittle and prone to errors as the schema becomes more complex (e.g., adding search filters or new relationship types).
+The suggestion is to replace raw SQL with a lightweight Query Builder (like SQLAlchemy Core or Peewee).
+
+* **Why it matters:** It improves code stability and security. It makes future features (like complex search queries or schema migrations) much easier to implement and less buggy.
+
+> **User Story:**
+> "As a Developer extending the tool, I want to write database queries using Python objects rather than raw SQL strings, so that I can easily add complex search filters (e.g., 'Find all geometry by User X created last week') without worrying about syntax errors or SQL injection."
+
+---
+
+### 5. Automated Capture Wrappers
+**The Improvement:**
+Manual tagging (`edna tag`, `edna link`) is the biggest barrier to adoption. Users forget to link inputs to outputs.
+We can implement simple wrappers or Python decorators that automate this. For example, a Python decorator `@edna.track` that logs the script execution, inputs, and outputs automatically.
+
+* **Why it matters:** It lowers the friction to near zero. The system captures lineage as a side-effect of the work, rather than requiring a separate manual step.
+
+> **User Story:**
+> "As a Script Writer, I want to add a single line of code to my Python analysis script that automatically registers the input datasets and output plots in `eng-dna` every time the script runs, so I don't have to manually type CLI commands."
+
+---
+
+### Recommended Next Step
+Given your agreement on the "wow factor," I recommend we start with **Improvement #1: Visual Lineage Export**. It is high-impact, self-contained, and demonstrates the power of the data you are already collecting.

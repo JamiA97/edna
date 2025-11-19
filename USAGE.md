@@ -17,6 +17,12 @@ $ edna link results/new.csv --from reports/day1.md --relation derived_from --rea
 # Trace a file's ancestors
 $ edna trace results/new.csv
 
+# Visual lineage export
+# Mermaid (default), ancestors only
+$ edna graph results/new.csv > lineage.mmd
+# Graphviz DOT, full graph, left-to-right
+$ edna graph results/new.csv --format dot --scope full --direction LR > lineage.dot
+
 # Search by tag/type/project
 $ edna search --tag baseline --project demo
 

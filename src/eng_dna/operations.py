@@ -2,12 +2,30 @@
 from __future__ import annotations
 
 import itertools
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
 from . import artefacts
 from .identity import compute_file_hash, generate_dna_token, looks_like_dna, normalize_path
 from .sidecar import read_identity, write_identity
+
+
+@dataclass
+class LineageNode:
+    id: int
+    dna_token: str
+    path: str
+    type: Optional[str]
+
+
+@dataclass
+class LineageEdge:
+    parent_id: int
+    child_id: int
+    relation_type: Optional[str]
+    reason: Optional[str]
 
 
 def tag_file(
@@ -367,3 +385,127 @@ def rescan_tree(conn, root: Path) -> list[str]:
             continue
         updated.append(artefact["dna_token"])
     return updated
+
+
+def build_lineage_graph(
+    conn,
+    root_artefact: dict,
+    scope: str = "ancestors",
+) -> tuple[dict[int, LineageNode], list[LineageEdge]]:
+    """Build an in-memory graph of artefacts reachable from *root_artefact*."""
+    valid_scopes = {"ancestors", "descendants", "full"}
+    if scope not in valid_scopes:
+        raise ValueError(f"Unknown scope '{scope}'. Expected one of {sorted(valid_scopes)}.")
+
+    nodes: dict[int, LineageNode] = {}
+    edges: list[LineageEdge] = []
+    visited: set[int] = set()
+    queue: deque[dict] = deque([root_artefact])
+
+    def _add_node(artefact: dict) -> None:
+        if artefact["id"] not in nodes:
+            nodes[artefact["id"]] = LineageNode(
+                id=artefact["id"],
+                dna_token=artefact["dna_token"],
+                path=artefact["path"],
+                type=artefact.get("type"),
+            )
+
+    while queue:
+        current = queue.popleft()
+        _add_node(current)
+        if current["id"] in visited:
+            continue
+        visited.add(current["id"])
+
+        if scope in {"ancestors", "full"}:
+            parents = artefacts.list_parents(conn, current["id"])
+            for parent in parents:
+                _add_node(parent)
+                edges.append(
+                    LineageEdge(
+                        parent_id=parent["id"],
+                        child_id=current["id"],
+                        relation_type=parent.get("relation_type"),
+                        reason=parent.get("reason"),
+                    )
+                )
+                if parent["id"] not in visited:
+                    queue.append(parent)
+
+        if scope in {"descendants", "full"}:
+            children = artefacts.list_children(conn, current["id"])
+            for child in children:
+                _add_node(child)
+                edges.append(
+                    LineageEdge(
+                        parent_id=current["id"],
+                        child_id=child["id"],
+                        relation_type=child.get("relation_type"),
+                        reason=child.get("reason"),
+                    )
+                )
+                if child["id"] not in visited:
+                    queue.append(child)
+
+    return nodes, edges
+
+
+def format_lineage_as_mermaid(
+    nodes: dict[int, LineageNode],
+    edges: list[LineageEdge],
+    *,
+    direction: str = "TB",
+) -> str:
+    direction = direction if direction in {"TB", "LR"} else "TB"
+    lines = [f"flowchart {direction}"]
+    for artefact_id in sorted(nodes):
+        node = nodes[artefact_id]
+        label = _format_node_label(node)
+        lines.append(f'    n_{node.id}["{_escape_mermaid(label)}"]')
+    for edge in sorted(edges, key=lambda e: (e.parent_id, e.child_id, e.relation_type or "")):
+        label = ""
+        if edge.relation_type:
+            relation_text = edge.relation_type.replace("|", "\\|")
+            label = f"|{relation_text}|"
+        lines.append(f"    n_{edge.parent_id} -->{label} n_{edge.child_id}")
+    return "\n".join(lines)
+
+
+def format_lineage_as_dot(
+    nodes: dict[int, LineageNode],
+    edges: list[LineageEdge],
+    *,
+    direction: str = "TB",
+) -> str:
+    direction = direction if direction in {"TB", "LR"} else "TB"
+    lines = ["digraph edna_lineage {", f"    rankdir={direction};"]
+    for artefact_id in sorted(nodes):
+        node = nodes[artefact_id]
+        label = _format_node_label(node)
+        lines.append(f'    n_{node.id} [label="{_escape_dot(label)}"];')
+    for edge in sorted(edges, key=lambda e: (e.parent_id, e.child_id, e.relation_type or "")):
+        attrs = ""
+        if edge.relation_type:
+            attrs = f' [label="{_escape_dot(edge.relation_type)}"]'
+        lines.append(f"    n_{edge.parent_id} -> n_{edge.child_id}{attrs};")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _format_node_label(node: LineageNode) -> str:
+    token = node.dna_token or ""
+    short = token[5:] if token.startswith("edna_") else token
+    short = short[:8] or token[:8] or "unknown"
+    artefact_type = node.type or "n/a"
+    basename = Path(node.path).name if node.path else ""
+    basename = basename or node.path or "n/a"
+    return f"{short} | {artefact_type} | {basename}"
+
+
+def _escape_mermaid(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _escape_dot(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')

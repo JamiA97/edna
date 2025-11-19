@@ -94,6 +94,33 @@ def trace(target: str = typer.Argument(..., help="File or DNA")) -> None:
 
 
 @app.command()
+def graph(
+    target: str = typer.Argument(..., help="File path or DNA token"),
+    fmt: str = typer.Option("mermaid", "--format", "-f", help="Output format: mermaid or dot"),
+    scope: str = typer.Option("ancestors", "--scope", help="Scope: ancestors, descendants, or full"),
+    direction: str = typer.Option("TB", "--direction", help="Graph direction: TB or LR"),
+) -> None:
+    format_opt = fmt.lower()
+    if format_opt not in {"mermaid", "dot"}:
+        raise typer.BadParameter("Invalid --format. Choose 'mermaid' or 'dot'.")
+    scope_opt = scope.lower()
+    if scope_opt not in {"ancestors", "descendants", "full"}:
+        raise typer.BadParameter("Invalid --scope. Choose 'ancestors', 'descendants', or 'full'.")
+    direction_opt = direction.upper()
+    if direction_opt not in {"TB", "LR"}:
+        raise typer.BadParameter("Invalid --direction. Choose 'TB' or 'LR'.")
+
+    with _db() as conn:
+        artefact, _ = operations.resolve_target(conn, target)
+        nodes, edges = operations.build_lineage_graph(conn, artefact, scope=scope_opt)
+        if format_opt == "mermaid":
+            output = operations.format_lineage_as_mermaid(nodes, edges, direction=direction_opt)
+        else:
+            output = operations.format_lineage_as_dot(nodes, edges, direction=direction_opt)
+        typer.echo(output)
+
+
+@app.command()
 def search(
     tags: List[str] = typer.Option([], "--tag", help="Filter by tag"),
     artefact_type: Optional[str] = typer.Option(None, "--type", help="Filter by type"),
