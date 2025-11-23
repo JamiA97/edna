@@ -1,1 +1,0 @@
-edna graph results/new.csv > lineage.mmd
