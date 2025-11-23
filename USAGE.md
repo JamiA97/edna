@@ -144,6 +144,7 @@ $ edna import edna_lineage_demo.json
 
 ```
 $ edna project add demo --name "Demo Build"
+$ edna project list
 $ edna project show demo
 $ edna project files demo
 ```

@@ -483,6 +483,23 @@ def get_project(conn, project_id: str) -> Optional[dict]:
     return fetchone(conn, "SELECT * FROM projects WHERE id = ?", [project_id])
 
 
+def list_all_projects(conn) -> list[dict]:
+    """
+    List all projects ordered by id.
+
+    Parameters:
+        conn: Database connection.
+
+    Returns:
+        List of project rows ordered by id.
+
+    Side Effects:
+        Database read.
+    """
+    cur = conn.execute("SELECT * FROM projects ORDER BY id")
+    return cur.fetchall()
+
+
 def list_project_files(conn, project_id: str) -> list[dict]:
     """
     List artefacts linked to a project.

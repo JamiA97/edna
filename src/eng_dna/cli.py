@@ -395,6 +395,26 @@ def project_add(
         typer.echo(f"Project {project['id']} created")
 
 
+@project_app.command("list")
+def project_list() -> None:
+    """
+    List all projects in the database.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Database read only.
+    """
+    with _db() as conn:
+        projects = artefacts.list_all_projects(conn)
+        if not projects:
+            typer.echo("No projects found")
+            return
+        for project in projects:
+            typer.echo(f"{project['id']} | {project['name']}")
+
+
 @project_app.command("show")
 def project_show(project_id: str = typer.Argument(..., help="Project id")) -> None:
     """
