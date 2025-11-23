@@ -579,6 +579,53 @@ def link_artefacts(
         )
 
 
+def unlink_artefacts(
+    conn,
+    child: dict,
+    parents: Iterable[dict],
+    relation_type: Optional[str] = None,
+    dry_run: bool = False,
+) -> list[tuple[dict, dict, str]]:
+    """
+    Remove lineage edges between a child and parents while preserving auditability.
+
+    Purpose:
+        Undo mistaken links by deleting specific parent-child relations and
+        recording an 'unlinked' event on the child.
+
+    Parameters:
+        conn: Database connection.
+        child: Child artefact row.
+        parents: Iterable of parent artefact rows.
+        relation_type: Optional relation filter; when None, remove all matching edges.
+        dry_run: If True, do not modify the database.
+
+    Returns:
+        List of (parent, child, relation_type) tuples that were (or would be) unlinked.
+
+    Side Effects:
+        When not in dry-run: deletes edges from the edges table and records an
+        'unlinked' event on the child for each removed edge.
+    """
+    unlinked: list[tuple[dict, dict, str]] = []
+    for parent in parents:
+        edges = artefacts.list_edges_between(conn, parent["id"], child["id"], relation_type)
+        if dry_run:
+            unlinked.extend((parent, child, edge["relation_type"]) for edge in edges)
+            continue
+        for edge in edges:
+            artefacts.delete_edge(conn, edge["id"])
+            artefacts.record_event(
+                conn,
+                child["id"],
+                event_type="unlinked",
+                description="Lineage link removed",
+                metadata={"parent": parent["dna_token"], "relation": edge["relation_type"]},
+            )
+            unlinked.append((parent, child, edge["relation_type"]))
+    return unlinked
+
+
 def trace_ancestors(conn, artefact: dict, depth: int = 0, seen: Optional[set[int]] = None) -> list[str]:
     """
     Produce a readable ancestor tree for an artefact.

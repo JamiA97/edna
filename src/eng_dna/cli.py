@@ -187,6 +187,48 @@ def link(
 
 
 @app.command()
+def unlink(
+    child: str = typer.Argument(..., help="Child file or DNA"),
+    parents: List[str] = typer.Option([], "--from", help="Parent(s) to unlink from"),
+    relation_type: Optional[str] = typer.Option("derived_from", "--relation", help="Relation type to remove"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview unlinking without DB changes"),
+) -> None:
+    """
+    Remove lineage links between a child artefact and one or more parents.
+
+    Parameters:
+        child: Child file or DNA token.
+        parents: Parent references to unlink from.
+        relation_type: Optional relation filter (defaults to derived_from).
+        dry_run: If True, only report what would be removed.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Deletes lineage edges and records 'unlinked' events when not dry-running.
+    """
+    if not parents:
+        raise typer.BadParameter("Provide at least one --from parent to unlink.")
+    with _db() as conn:
+        child_art, _ = operations.resolve_target(conn, child)
+        parent_arts = [operations.resolve_target(conn, parent)[0] for parent in parents]
+        removed = operations.unlink_artefacts(
+            conn,
+            child_art,
+            parent_arts,
+            relation_type=relation_type,
+            dry_run=dry_run,
+        )
+        if not removed:
+            typer.echo("No matching links to remove" if dry_run else "No matching links removed")
+            return
+        for parent, _, rel in removed:
+            prefix = "Would unlink" if dry_run else "Unlinked"
+            typer.echo(f"{prefix} {parent['dna_token']} -> {child_art['dna_token']} (relation={rel})")
+
+
+@app.command()
 def trace(target: str = typer.Argument(..., help="File or DNA")) -> None:
     """
     Print a simple ancestor trace for an artefact.

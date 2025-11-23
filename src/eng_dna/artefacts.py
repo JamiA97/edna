@@ -388,6 +388,58 @@ def create_edge(
         )
 
 
+def list_edges_between(
+    conn,
+    parent_id: int,
+    child_id: int,
+    relation_type: Optional[str] = None,
+) -> list[dict]:
+    """
+    Fetch edges that connect a parent to a child.
+
+    Parameters:
+        conn: Database connection.
+        parent_id: Parent artefact id.
+        child_id: Child artefact id.
+        relation_type: Optional relation filter.
+
+    Returns:
+        List of matching edge rows ordered by creation time.
+
+    Side Effects:
+        Database read on the edges table.
+    """
+    query = """
+        SELECT * FROM edges
+        WHERE parent_id = ? AND child_id = ?
+    """
+    args: list = [parent_id, child_id]
+    if relation_type:
+        query += " AND relation_type = ?"
+        args.append(relation_type)
+    query += " ORDER BY created_at ASC"
+    cur = conn.execute(query, tuple(args))
+    return cur.fetchall()
+
+
+def delete_edge(conn, edge_id: int) -> None:
+    """
+    Delete a specific lineage edge by id.
+
+    Parameters:
+        conn: Database connection.
+        edge_id: Primary key of the edge to remove.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Removes a row from the edges table.
+    """
+    with conn:
+        conn.execute("DELETE FROM edges WHERE id = ?", (edge_id,))
+
+
 def list_parents(conn, child_id: int) -> list[dict]:
     """
     List parents of a child artefact, including edge metadata.

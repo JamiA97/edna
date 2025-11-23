@@ -26,6 +26,22 @@ $ edna tag results/run1_pressures.csv --type data --tag post --project aero
 $ edna link results/run1_pressures.csv --from cfd/run1.jou --relation derived_from --reason "post-processing"
 ```
 
+Unlinking mistaken lineage:
+
+```
+# Create a derived artefact and link it
+$ edna tag results/run1_pressures.csv --type data --tag post --project aero
+$ edna link results/run1_pressures.csv --from cfd/run1.jou --relation derived_from --reason "post-processing"
+
+# If the link was made in error, remove it
+$ edna unlink results/run1_pressures.csv --from cfd/run1.jou --relation derived_from
+
+# Preview what would be unlinked without changing the DB
+$ edna unlink results/run1_pressures.csv --from cfd/run1.jou --relation derived_from --dry-run
+```
+
+`unlink` removes edges from the lineage graph while recording an `unlinked` event on the child for auditability.
+
 Showing artefacts by DNA token:
 
 ```
