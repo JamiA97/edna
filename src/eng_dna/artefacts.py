@@ -440,6 +440,26 @@ def delete_edge(conn, edge_id: int) -> None:
         conn.execute("DELETE FROM edges WHERE id = ?", (edge_id,))
 
 
+def delete_project_record(conn, project_id: str) -> None:
+    """
+    Delete a project row.
+
+    Relies on ON DELETE CASCADE to remove artefact-project links.
+
+    Parameters:
+        conn: Database connection.
+        project_id: Identifier of the project to delete.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Removes a project row and cascades link deletions.
+    """
+    with conn:
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+
 def list_parents(conn, child_id: int) -> list[dict]:
     """
     List parents of a child artefact, including edge metadata.

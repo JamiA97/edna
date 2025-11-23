@@ -14,7 +14,7 @@ from typing import Iterable, Optional
 
 from . import artefacts
 from .identity import compute_file_hash, generate_dna_token, looks_like_dna, normalize_path
-from .sidecar import read_identity, write_identity
+from .sidecar import get_sidecar_path, read_identity, write_identity
 
 
 @dataclass
@@ -624,6 +624,73 @@ def unlink_artefacts(
             )
             unlinked.append((parent, child, edge["relation_type"]))
     return unlinked
+
+
+def delete_project(
+    conn,
+    project_id: str,
+    purge_sidecars: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Destructively delete a project and optionally purge exclusive sidecars.
+
+    Artefacts remain intact; only the project record is removed. When
+    ``purge_sidecars`` is True, sidecars for artefacts linked exclusively to
+    this project are deleted as part of the cleanup.
+
+    Parameters:
+        conn: Database connection.
+        project_id: Project identifier to delete.
+        purge_sidecars: Whether to delete sidecars for artefacts belonging only to this project.
+        dry_run: If True, calculate effects without changing DB or filesystem.
+
+    Returns:
+        Summary dict containing the project row, counts, candidate sidecars, and
+        deletion outcomes.
+
+    Side Effects:
+        When not in dry-run: deletes the project row (cascading artefact links)
+        and removes sidecar files for exclusive artefacts when requested.
+    """
+    project = artefacts.get_project(conn, project_id)
+    artefact_rows = artefacts.list_project_files(conn, project_id) if project else []
+
+    exclusive: list[dict] = []
+    sidecars: list[Path] = []
+    for artefact in artefact_rows:
+        memberships = artefacts.list_projects(conn, artefact["id"])
+        if len(memberships) == 1 and memberships[0]["id"] == project_id:
+            exclusive.append(artefact)
+            if purge_sidecars:
+                sidecars.append(get_sidecar_path(Path(artefact["path"])))
+
+    deleted_sidecars: list[Path] = []
+    if dry_run or not project:
+        return {
+            "project": project,
+            "artefact_count": len(artefact_rows),
+            "exclusive_artefact_count": len(exclusive),
+            "sidecars_to_delete": sidecars,
+            "deleted_project": False,
+            "deleted_sidecars": deleted_sidecars,
+        }
+
+    artefacts.delete_project_record(conn, project_id)
+    if purge_sidecars:
+        for sidecar in sidecars:
+            if sidecar.exists():
+                sidecar.unlink()
+                deleted_sidecars.append(sidecar)
+
+    return {
+        "project": project,
+        "artefact_count": len(artefact_rows),
+        "exclusive_artefact_count": len(exclusive),
+        "sidecars_to_delete": sidecars,
+        "deleted_project": True,
+        "deleted_sidecars": deleted_sidecars,
+    }
 
 
 def trace_ancestors(conn, artefact: dict, depth: int = 0, seen: Optional[set[int]] = None) -> list[str]:

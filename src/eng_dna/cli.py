@@ -504,6 +504,62 @@ def project_files(project_id: str = typer.Argument(..., help="Project id")) -> N
             typer.echo(f"{artefact['dna_token']} | {artefact['path']}")
 
 
+@project_app.command("delete")
+def project_delete(
+    project_id: str = typer.Argument(..., help="Project id"),
+    purge_sidecars: bool = typer.Option(False, "--purge-sidecars", help="Delete sidecars for exclusive artefacts"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview deletions without changes"),
+    force: bool = typer.Option(False, "--force", help="Required to perform deletion"),
+) -> None:
+    """
+    Delete a project and detach its artefacts, optionally purging sidecars.
+
+    Parameters:
+        project_id: Identifier of the project to delete.
+        purge_sidecars: Whether to delete .edna files for artefacts belonging only to this project.
+        dry_run: If True, only report what would be deleted.
+        force: Required to execute the deletion when not in dry-run mode.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Deletes a project record and may remove sidecar files when permitted.
+    """
+    with _db() as conn:
+        project = artefacts.get_project(conn, project_id)
+        if not project:
+            typer.echo(f"Unknown project {project_id}")
+            raise typer.Exit(code=1)
+
+        if dry_run:
+            summary = operations.delete_project(conn, project_id, purge_sidecars=purge_sidecars, dry_run=True)
+            typer.echo(f"Project: {project['id']} ({project['name']})")
+            typer.echo(f"Artefacts linked: {summary['artefact_count']}")
+            if purge_sidecars:
+                typer.echo(f"Sidecars eligible for purge: {len(summary['sidecars_to_delete'])}")
+                for sidecar in summary["sidecars_to_delete"]:
+                    typer.echo(str(sidecar))
+            raise typer.Exit(code=0)
+
+        preview = operations.delete_project(conn, project_id, purge_sidecars=purge_sidecars, dry_run=True)
+        if not force:
+            typer.echo(f"This will delete project '{project_id}' and detach {preview['artefact_count']} artefacts.")
+            if purge_sidecars:
+                typer.echo(
+                    f"It will also delete {len(preview['sidecars_to_delete'])} .edna sidecars for artefacts"
+                    " belonging only to this project."
+                )
+            typer.echo("Re-run with --force to proceed.")
+            raise typer.Exit(code=1)
+
+        result = operations.delete_project(conn, project_id, purge_sidecars=purge_sidecars, dry_run=False)
+        typer.echo(f"Deleted project {project['id']} ({project['name']})")
+        typer.echo(f"Detached {result['artefact_count']} artefacts")
+        if purge_sidecars:
+            typer.echo(f"Deleted {len(result['deleted_sidecars'])} .edna sidecars")
+
+
 def _print_artefact(conn, artefact: dict) -> None:
     """
     Render detailed artefact information for CLI output.

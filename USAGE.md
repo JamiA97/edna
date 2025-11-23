@@ -103,6 +103,34 @@ $ edna link cfd/mesh.jou --from cad/wing.sldprt --relation derived_from --reason
 $ edna graph cad/wing.sldprt --scope full --direction LR > lineage.mmd
 ```
 
+## Project deletion (dangerous)
+
+Delete a project and detach its artefacts:
+
+```bash
+# Preview (no changes)
+edna project delete demo --dry-run
+
+# Delete the project and detach artefacts (requires --force)
+edna project delete demo --force
+```
+
+Optionally delete .edna sidecars for artefacts that belong only to this project:
+
+```bash
+# Preview which sidecars would be removed
+edna project delete demo --purge-sidecars --dry-run
+
+# Actually delete the project and the exclusive sidecars
+edna project delete demo --purge-sidecars --force
+```
+
+Notes:
+
+Artefacts are not deleted; they remain in the database.
+
+Sidecars are only purged for artefacts that are not linked to any other project.
+
 ## Pathology cases and recovery
 
 ```
