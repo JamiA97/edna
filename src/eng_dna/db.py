@@ -1,4 +1,8 @@
-"""SQLite helpers for eng-dna (Background.md §4)."""
+"""SQLite helpers for eng-dna.
+
+Centralises database path resolution, connections, and schema creation so every
+CLI entrypoint and background process uses identical persistence behaviour.
+"""
 from __future__ import annotations
 
 import os
@@ -10,16 +14,47 @@ DB_FILENAME = "eng_dna.db"
 
 
 def _dict_factory(cursor: sqlite3.Cursor, row: tuple) -> dict:
+    """
+    Convert SQLite rows to dicts keyed by column name.
+
+    Parameters:
+        cursor: SQLite cursor providing column metadata.
+        row: Row tuple.
+
+    Returns:
+        Dict mapping column names to values.
+
+    Side Effects:
+        None.
+    """
     return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
 
 def resolve_db_path(
     explicit_path: Optional[str] = None, require_exists: bool = True, start: Optional[Path] = None
 ) -> Path:
-    """Resolve the DB path.
+    """
+    Resolve the database path in a predictable order.
 
-    Searches for eng_dna.db upward from *start* (defaults to cwd) unless *explicit_path* or
-    $EDNA_DB_PATH is provided.
+    What:
+        Returns the concrete path to ``eng_dna.db`` based on explicit CLI
+        arguments, the environment override, or nearest ancestor directory.
+
+    Why:
+        Keeping resolution rules consistent prevents commands from writing to
+        multiple databases when run from different subdirectories.
+
+    Parameters:
+        explicit_path: Path supplied via CLI; takes priority when provided.
+        require_exists: Whether to raise if the resolved DB does not exist.
+        start: Directory to search upward from; defaults to cwd.
+
+    Returns:
+        Resolved Path to the database (existing or candidate).
+
+    Side Effects:
+        Reads environment variable EDNA_DB_PATH; may raise FileNotFoundError
+        when *require_exists* is True and nothing is found.
     """
 
     if explicit_path:
@@ -52,6 +87,20 @@ def resolve_db_path(
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
+    """
+    Open a SQLite connection with EDNA defaults.
+
+    Ensures foreign key enforcement is enabled and the parent directory exists.
+
+    Parameters:
+        db_path: Path to eng_dna.db.
+
+    Returns:
+        SQLite connection configured with dict rows.
+
+    Side Effects:
+        Creates parent directories if missing; opens database file.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = _dict_factory
@@ -60,6 +109,18 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path) -> None:
+    """
+    Initialise a new database file with the EDNA schema.
+
+    Parameters:
+        db_path: Location for the database.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Creates or opens the DB file and writes schema tables if missing.
+    """
     conn = connect(db_path)
     try:
         ensure_schema(conn)
@@ -68,7 +129,26 @@ def init_db(db_path: Path) -> None:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create the baseline schema if it does not yet exist."""
+    """
+    Create the baseline schema if it does not yet exist.
+
+    What:
+        Idempotently applies CREATE TABLE statements for artefacts, events,
+        edges, tags, notes, projects, and indexes.
+
+    Why:
+        Centralising schema creation avoids drift between CLI entrypoints and
+        ensures tests use the same structure as production.
+
+    Parameters:
+        conn: Open SQLite connection.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Executes DDL statements; safe to run repeatedly.
+    """
 
     schema_statements: Iterable[str] = [
         """

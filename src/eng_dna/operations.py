@@ -1,4 +1,9 @@
-"""High-level operations backing the CLI."""
+"""High-level operations backing the CLI and lineage tooling.
+
+These functions orchestrate identity resolution, versioning rules, lineage edge
+creation, and sidecar maintenance. Business logic lives here so CLI handlers
+stay thin and database primitives remain reusable.
+"""
 from __future__ import annotations
 
 import itertools
@@ -14,6 +19,7 @@ from .sidecar import read_identity, write_identity
 
 @dataclass
 class LineageNode:
+    """Lightweight representation of an artefact used when rendering graphs."""
     id: int
     dna_token: str
     path: str
@@ -22,6 +28,7 @@ class LineageNode:
 
 @dataclass
 class LineageEdge:
+    """In-memory edge describing parent-child lineage relationships."""
     parent_id: int
     child_id: int
     relation_type: Optional[str]
@@ -38,6 +45,32 @@ def tag_file(
     project_ids: Optional[list[str]],
     force_overwrite: bool = False,
 ) -> dict:
+    """
+    Tag a file by assigning (or reconciling) a DNA record and metadata.
+
+    What:
+        Computes the file hash, looks for existing identity via sidecar or hash,
+        and either updates metadata, creates a new artefact, or versions it.
+    Why:
+        Central entrypoint for CLI tagging; keeps decision tree consistent
+        between first-time and repeat tagging.
+
+    Parameters:
+        conn: Database connection.
+        file_path: File to tag.
+        artefact_type: Optional type label.
+        description: Optional description.
+        tags: Optional list of tags to attach.
+        project_ids: Optional list of project ids to link.
+        force_overwrite: If True, allows overwriting hash instead of versioning.
+
+    Returns:
+        Artefact row representing the tracked item (new or existing/versioned).
+
+    Side Effects:
+        Reads file for hashing; may write sidecar; may insert/update DB rows and
+        record events.
+    """
     file_path = file_path.expanduser().resolve()
     file_hash = compute_file_hash(file_path)
     identity = read_identity(file_path)
@@ -48,6 +81,7 @@ def tag_file(
     if not existing:
         existing = artefacts.lookup_by_hash(conn, file_hash)
 
+    # Decision tree: prefer DNA from sidecar, fall back to hash match, otherwise create new.
     if existing:
         return _handle_existing_file(
             conn,
@@ -84,6 +118,24 @@ def show_target(
     *,
     force_overwrite: bool = False,
 ) -> dict:
+    """
+    Resolve and return an artefact without creating a version.
+
+    What:
+        Thin wrapper around resolve_target that prohibits overwriting hashes in a
+        read-only context.
+
+    Parameters:
+        conn: Database connection.
+        target: File path, DNA token, or stored path reference.
+        force_overwrite: Unsupported for show (retained for signature parity).
+
+    Returns:
+        Artefact row corresponding to the target.
+
+    Side Effects:
+        May update sidecar/path during housekeeping when resolving a file.
+    """
     artefact, _ = resolve_target(
         conn,
         target,
@@ -100,6 +152,29 @@ def resolve_target(
     force_overwrite: bool = False,
     allow_versioning: bool = False,
 ) -> tuple[dict, Optional[Path]]:
+    """
+    Resolve a user-supplied target into an artefact.
+
+    Decision tree:
+        1) If the argument points to an existing file, prefer on-disk identity
+           (sidecar/embedded) then hash. This path allows versioning if enabled.
+        2) If the string looks like a DNA token, fetch directly.
+        3) Otherwise treat it as a stored path even if the file no longer
+           exists, ensuring historical records remain reachable.
+
+    Parameters:
+        conn: Database connection.
+        target: Path-like string or DNA token.
+        force_overwrite: Allow hash overwrite during housekeeping when True.
+        allow_versioning: Permit new versions on hash mismatch when True.
+
+    Returns:
+        Tuple of (artefact row, Path if the target was a file else None).
+
+    Side Effects:
+        When resolving a file, may rewrite sidecars, update DB path records, and
+        emit events depending on housekeeping outcomes.
+    """
     target_path = Path(target)
     if target_path.exists():
         artefact = resolve_file_reference(
@@ -114,7 +189,7 @@ def resolve_target(
         if not artefact:
             raise ValueError(f"No artefact with DNA {target}")
         return artefact, None
-    # treat as normalised path even if file missing
+    # Treat as normalised path even when the file is missing; keeps historical lookups alive.
     artefact = artefacts.lookup_by_path(conn, target)
     if not artefact:
         raise ValueError(f"Could not resolve target {target}")
@@ -128,6 +203,30 @@ def resolve_file_reference(
     force_overwrite: bool = False,
     allow_versioning: bool = False,
 ) -> dict:
+    """
+    Resolve an on-disk file to a tracked artefact.
+
+    What:
+        Normalises the path, reads identity markers, hashes the file, then
+        searches by DNA, embedded hash, and finally fresh hash before applying
+        housekeeping actions.
+
+    Why:
+        Keeps consistent reconciliation logic for tag, show, rescan, and graph
+        workflows.
+
+    Parameters:
+        conn: Database connection.
+        file_path: Path to an existing file.
+        force_overwrite: Allow hash overwrite if mismatched.
+        allow_versioning: Whether to create a new version on hash mismatch.
+
+    Returns:
+        Up-to-date artefact row reflecting any housekeeping changes.
+
+    Side Effects:
+        Reads file for hashing; may update DB path or hash; may write sidecar.
+    """
     file_path = file_path.expanduser().resolve()
     identity = read_identity(file_path)
     file_hash = compute_file_hash(file_path)
@@ -166,6 +265,33 @@ def _post_resolve_housekeeping(
     force_overwrite: bool,
     allow_versioning: bool,
 ) -> dict:
+    """
+    Apply reconciliation after resolving a file to an artefact.
+
+    What:
+        - Normalises and updates stored paths when files move.
+        - Detects hash mismatches to decide between versioning or overwrite.
+        - Restores missing sidecars when identity is absent on disk.
+
+    Why:
+        Keeps resolution side-effects predictable and auditable through events.
+
+    Parameters:
+        conn: Database connection.
+        artefact: Resolved artefact row.
+        file_path: Current file path.
+        identity_found: Whether a sidecar/embedded identity was present.
+        file_hash: Freshly computed hash.
+        force_overwrite: Allow hash overwrite on mismatch.
+        allow_versioning: Permit automatic version creation on mismatch.
+
+    Returns:
+        Updated artefact row (possibly new version).
+
+    Side Effects:
+        Writes events for moves, sidecar restoration, hash overwrite/version
+        actions; may update artefacts table and rewrite sidecars.
+    """
     artefact = _ensure_path(conn, artefact, file_path)
     if artefact["hash"] != file_hash:
         if not allow_versioning:
@@ -174,6 +300,7 @@ def _post_resolve_housekeeping(
                     "Hash overwrites must be performed via 'edna tag --force-overwrite'.",
                 )
             return artefact
+        # Hash mismatch with versioning allowed: either overwrite or create a new version downstream.
         artefact = _handle_hash_change(
             conn,
             artefact,
@@ -184,6 +311,7 @@ def _post_resolve_housekeeping(
     else:
         write_identity(file_path, artefact["dna_token"], file_hash, artefact.get("type"), artefact["path"])
         if not identity_found:
+            # If the sidecar/embedded marker was missing, rewrite it and record restoration.
             artefacts.record_event(
                 conn,
                 artefact["id"],
@@ -207,6 +335,32 @@ def _handle_existing_file(
     identity_found: bool,
     command: str,
 ) -> dict:
+    """
+    Update metadata for a file already tracked by EDNA.
+
+    What:
+        Runs housekeeping, applies optional type/description/tag/project updates,
+        and records an event indicating the command touched an existing record.
+
+    Parameters:
+        conn: Database connection.
+        artefact: Existing artefact row.
+        file_path: Current file location.
+        file_hash: Computed hash.
+        artefact_type: Optional type override.
+        description: Optional description override.
+        tags: Optional tags to add.
+        project_ids: Optional projects to link.
+        force_overwrite: Allow hash overwrite when versioning.
+        identity_found: True if a sidecar/embedded marker was present.
+        command: Name of the invoking command for event logging.
+
+    Returns:
+        Updated artefact row (or new version).
+
+    Side Effects:
+        May update DB fields, attach tags/projects, and write events/sidecars.
+    """
     artefact = _post_resolve_housekeeping(
         conn,
         artefact,
@@ -244,8 +398,28 @@ def _handle_existing_file(
 
 
 def _ensure_path(conn, artefact: dict, file_path: Path) -> dict:
+    """
+    Reconcile stored path with the current file location.
+
+    Why:
+        Files can move; EDNA normalises the incoming path and updates the DB so
+        future lookups by path remain accurate.
+
+    Parameters:
+        conn: Database connection.
+        artefact: Artefact row to update if needed.
+        file_path: Current on-disk location.
+
+    Returns:
+        Artefact row (refreshed if a path change occurred).
+
+    Side Effects:
+        Updates artefacts.path, records a 'moved' event, and rewrites the
+        sidecar later in the workflow.
+    """
     norm = normalize_path(file_path)
     if artefact["path"] != norm:
+        # Path normalisation ensures moves/symlinks are captured consistently before logging events.
         artefacts.update_path(conn, artefact["id"], norm)
         artefacts.record_event(
             conn,
@@ -265,6 +439,26 @@ def _handle_hash_change(
     *,
     force_overwrite: bool,
 ) -> dict:
+    """
+    Respond to a hash mismatch between disk and database.
+
+    Decision points:
+        - If force_overwrite is True, update the existing record hash and log it.
+        - Otherwise, create a new version linked to the parent and emit events.
+
+    Parameters:
+        conn: Database connection.
+        artefact: Existing artefact row.
+        file_path: Current path for the changed file.
+        new_hash: Fresh SHA-256 digest.
+        force_overwrite: Whether to bypass versioning.
+
+    Returns:
+        Artefact row representing the updated or new version.
+
+    Side Effects:
+        Updates hash or inserts a child artefact; records events; writes sidecar.
+    """
     if force_overwrite:
         artefacts.update_hash(conn, artefact["id"], new_hash)
         artefacts.record_event(
@@ -290,6 +484,7 @@ def _handle_hash_change(
         new_path=str(file_path),
         description=artefact.get("description"),
     )
+    # Versioning is triggered on hash change unless explicitly overridden.
     write_identity(
         file_path,
         new_version["dna_token"],
@@ -307,6 +502,22 @@ def link_artefacts(
     relation_type: str,
     reason: Optional[str],
 ) -> None:
+    """
+    Create lineage links between a child and one or more parents.
+
+    Parameters:
+        conn: Database connection.
+        child: Child artefact row.
+        parents: Iterable of parent artefact rows.
+        relation_type: Relation label (e.g. derived_from).
+        reason: Optional rationale.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Inserts edges and records a 'linked' event on the child for each parent.
+    """
     for parent in parents:
         artefacts.create_edge(
             conn,
@@ -324,11 +535,30 @@ def link_artefacts(
 
 
 def trace_ancestors(conn, artefact: dict, depth: int = 0, seen: Optional[set[int]] = None) -> list[str]:
+    """
+    Produce a readable ancestor tree for an artefact.
+
+    The traversal tracks visited nodes to prevent infinite recursion in cyclic
+    graphs and marks repeated nodes with '*'.
+
+    Parameters:
+        conn: Database connection.
+        artefact: Starting artefact row.
+        depth: Current indentation depth (used during recursion).
+        seen: Set of visited artefact ids to avoid cycles.
+
+    Returns:
+        List of formatted strings representing the ancestor tree.
+
+    Side Effects:
+        Reads lineage edges via database lookups.
+    """
     seen = seen or set()
     lines = []
     indent = "  " * depth
     lines.append(f"{indent}- {artefact['dna_token']} ({artefact['path']})")
     if artefact["id"] in seen:
+        # Recursion guard: mark already-seen nodes and stop descending to avoid loops.
         lines[-1] += " *"
         return lines
     seen.add(artefact["id"])
@@ -344,6 +574,21 @@ def search_artefacts(
     artefact_type: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> list[dict]:
+    """
+    Search artefacts by tags, type, and/or project membership.
+
+    Parameters:
+        conn: Database connection.
+        tags: Optional tags to match (any).
+        artefact_type: Optional type filter.
+        project_id: Optional project filter.
+
+    Returns:
+        List of artefact rows matching the criteria.
+
+    Side Effects:
+        Database read with conditional joins depending on filters.
+    """
     clauses = ["1=1"]
     params: list[str] = []
     join_tags = False
@@ -373,7 +618,28 @@ def search_artefacts(
 
 
 def rescan_tree(conn, root: Path) -> list[str]:
-    """Walk *root* to reconcile files and sidecars."""
+    """
+    Walk a directory tree to reconcile files and sidecars.
+
+    What:
+        Visits every non-sidecar file, resolves it to an artefact, and applies
+        housekeeping (path updates, sidecar restoration, versioning decisions)
+        without stopping on errors.
+
+    Why:
+        Provides a bulk-repair mechanism for missing sidecars or moved files.
+
+    Parameters:
+        conn: Database connection.
+        root: Directory to scan recursively.
+
+    Returns:
+        List of DNA tokens updated during the scan.
+
+    Side Effects:
+        Reads and writes sidecars; may update DB paths/hashes/events for many
+        artefacts.
+    """
     root = root.expanduser().resolve()
     updated: list[str] = []
     for path in sorted(root.rglob("*")):
@@ -382,6 +648,7 @@ def rescan_tree(conn, root: Path) -> list[str]:
         try:
             artefact = resolve_file_reference(conn, path)
         except Exception:
+            # Orphaned or untracked files are skipped so rescans remain resilient.
             continue
         updated.append(artefact["dna_token"])
     return updated
@@ -392,7 +659,20 @@ def build_lineage_graph(
     root_artefact: dict,
     scope: str = "ancestors",
 ) -> tuple[dict[int, LineageNode], list[LineageEdge]]:
-    """Build an in-memory graph of artefacts reachable from *root_artefact*."""
+    """
+    Build an in-memory graph of artefacts reachable from *root_artefact*.
+
+    Parameters:
+        conn: Database connection.
+        root_artefact: Artefact row to anchor traversal.
+        scope: 'ancestors', 'descendants', or 'full'.
+
+    Returns:
+        Tuple of node mapping and edge list suitable for rendering.
+
+    Side Effects:
+        Reads lineage edges/artefacts; tracks visited ids to avoid cycles.
+    """
     valid_scopes = {"ancestors", "descendants", "full"}
     if scope not in valid_scopes:
         raise ValueError(f"Unknown scope '{scope}'. Expected one of {sorted(valid_scopes)}.")
@@ -402,6 +682,7 @@ def build_lineage_graph(
     visited: set[int] = set()
     queue: deque[dict] = deque([root_artefact])
 
+    # Local helper to de-duplicate nodes as the traversal walks parents/children.
     def _add_node(artefact: dict) -> None:
         if artefact["id"] not in nodes:
             nodes[artefact["id"]] = LineageNode(
@@ -430,6 +711,7 @@ def build_lineage_graph(
                         reason=parent.get("reason"),
                     )
                 )
+                # Queue parents to walk lineage upward without recursion overflow.
                 if parent["id"] not in visited:
                     queue.append(parent)
 
@@ -445,6 +727,7 @@ def build_lineage_graph(
                         reason=child.get("reason"),
                     )
                 )
+                # Queue children to follow derivations down the graph.
                 if child["id"] not in visited:
                     queue.append(child)
 
@@ -457,6 +740,20 @@ def format_lineage_as_mermaid(
     *,
     direction: str = "TB",
 ) -> str:
+    """
+    Render a lineage graph as Mermaid flowchart markup.
+
+    Parameters:
+        nodes: Mapping of artefact id to LineageNode.
+        edges: List of LineageEdge objects.
+        direction: Flow direction ('TB' or 'LR').
+
+    Returns:
+        Mermaid flowchart string.
+
+    Side Effects:
+        None.
+    """
     direction = direction if direction in {"TB", "LR"} else "TB"
     lines = [f"flowchart {direction}"]
     for artefact_id in sorted(nodes):
@@ -478,6 +775,20 @@ def format_lineage_as_dot(
     *,
     direction: str = "TB",
 ) -> str:
+    """
+    Render a lineage graph as Graphviz DOT.
+
+    Parameters:
+        nodes: Mapping of artefact id to LineageNode.
+        edges: List of LineageEdge objects.
+        direction: Rank direction ('TB' or 'LR').
+
+    Returns:
+        DOT source string.
+
+    Side Effects:
+        None.
+    """
     direction = direction if direction in {"TB", "LR"} else "TB"
     lines = ["digraph edna_lineage {", f"    rankdir={direction};"]
     for artefact_id in sorted(nodes):
@@ -494,6 +805,18 @@ def format_lineage_as_dot(
 
 
 def _format_node_label(node: LineageNode) -> str:
+    """
+    Build a concise label for a lineage node.
+
+    Parameters:
+        node: LineageNode to format.
+
+    Returns:
+        Human-readable node label including short DNA, type, and basename.
+
+    Side Effects:
+        None.
+    """
     token = node.dna_token or ""
     short = token[5:] if token.startswith("edna_") else token
     short = short[:8] or token[:8] or "unknown"
@@ -504,8 +827,10 @@ def _format_node_label(node: LineageNode) -> str:
 
 
 def _escape_mermaid(text: str) -> str:
+    """Escape text for safe inclusion in Mermaid labels."""
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _escape_dot(text: str) -> str:
+    """Escape text for safe inclusion in DOT labels."""
     return text.replace("\\", "\\\\").replace('"', '\\"')

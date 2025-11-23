@@ -1,4 +1,9 @@
-"""Database operations for artefacts and projects (Background.md §3-6)."""
+"""Low-level database helpers for artefacts, lineage, tags, and projects.
+
+This module encapsulates all SQLite access used by EDNA so higher-level
+operations remain declarative. It keeps schema details, event logging, and
+version linkage in one place to avoid divergent SQL across commands.
+"""
 from __future__ import annotations
 
 import json
@@ -8,32 +13,127 @@ from .identity import generate_dna_token, normalize_path
 
 
 def fetchone(conn, query: str, args: Iterable) -> Optional[dict]:
+    """
+    Execute a query and return a single row as a dict.
+
+    Parameters:
+        conn: Open SQLite connection.
+        query: SQL with placeholders.
+        args: Iterable of positional parameters.
+
+    Returns:
+        Row dict or None if no results.
+
+    Side Effects:
+        Issues a read query against the database.
+    """
     cur = conn.execute(query, tuple(args))
     return cur.fetchone()
 
 
 def lookup_by_dna(conn, dna_token: str) -> Optional[dict]:
+    """
+    Fetch an artefact by its immutable DNA token.
+
+    Parameters:
+        conn: Database connection.
+        dna_token: DNA token string.
+
+    Returns:
+        Artefact row or None.
+
+    Side Effects:
+        Database read.
+    """
     return fetchone(conn, "SELECT * FROM artefacts WHERE dna_token = ?", [dna_token])
 
 
 def lookup_by_path(conn, path: str) -> Optional[dict]:
+    """
+    Fetch an artefact by its stored path.
+
+    Paths are normalised before comparison so updates triggered by move-detection
+    stay consistent across operations.
+
+    Parameters:
+        conn: Database connection.
+        path: Path to resolve.
+
+    Returns:
+        Artefact row or None.
+
+    Side Effects:
+        Database read.
+    """
     return fetchone(conn, "SELECT * FROM artefacts WHERE path = ?", [normalize_path(path)])
 
 
 def lookup_by_hash(conn, file_hash: str) -> Optional[dict]:
+    """
+    Fetch an artefact by file hash.
+
+    Parameters:
+        conn: Database connection.
+        file_hash: SHA-256 hash hex digest.
+
+    Returns:
+        Artefact row or None.
+
+    Side Effects:
+        Database read.
+    """
     return fetchone(conn, "SELECT * FROM artefacts WHERE hash = ?", [file_hash])
 
 
 def fetch_artefact(conn, artefact_id: int) -> Optional[dict]:
+    """
+    Fetch an artefact by primary key.
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Internal artefact id.
+
+    Returns:
+        Artefact row or None.
+
+    Side Effects:
+        Database read.
+    """
     return fetchone(conn, "SELECT * FROM artefacts WHERE id = ?", [artefact_id])
 
 
 def list_tags(conn, artefact_id: int) -> list[str]:
+    """
+    List tags attached to an artefact.
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+
+    Returns:
+        Sorted list of tag strings.
+
+    Side Effects:
+        Database read.
+    """
     cur = conn.execute("SELECT tag FROM tags WHERE artefact_id = ? ORDER BY tag", (artefact_id,))
     return [row["tag"] for row in cur.fetchall()]
 
 
 def list_projects(conn, artefact_id: int) -> list[dict]:
+    """
+    List projects an artefact belongs to.
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+
+    Returns:
+        List of project rows ordered by id.
+
+    Side Effects:
+        Database read via join on artefact_projects.
+    """
     cur = conn.execute(
         """
         SELECT p.* FROM projects p
@@ -47,6 +147,19 @@ def list_projects(conn, artefact_id: int) -> list[dict]:
 
 
 def list_events(conn, artefact_id: int) -> list[dict]:
+    """
+    List recorded events for an artefact (newest first).
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+
+    Returns:
+        List of event rows.
+
+    Side Effects:
+        Database read.
+    """
     cur = conn.execute(
         "SELECT * FROM events WHERE artefact_id = ? ORDER BY created_at DESC",
         (artefact_id,),
@@ -65,6 +178,25 @@ def create_artefact(
     tags: Optional[list[str]] = None,
     project_ids: Optional[list[str]] = None,
 ) -> dict:
+    """
+    Insert a new artefact row and attach tags/projects.
+
+    Parameters:
+        conn: Database connection.
+        dna_token: Assigned DNA token.
+        path: File path (will be normalised).
+        file_hash: SHA-256 content hash.
+        artefact_type: Optional type label.
+        description: Optional description.
+        tags: Tag strings to attach.
+        project_ids: Project ids to link to.
+
+    Returns:
+        Newly created artefact row.
+
+    Side Effects:
+        Writes artefacts row, tags, project links, and a 'created' event.
+    """
     norm_path = normalize_path(path)
     with conn:
         cur = conn.execute(
@@ -90,6 +222,20 @@ def create_artefact(
 
 
 def add_tags(conn, artefact_id: int, tags: list[str]) -> None:
+    """
+    Attach tags to an artefact (idempotent).
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+        tags: Tag strings.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Inserts into tags table; ignores duplicates.
+    """
     with conn:
         for tag in tags:
             conn.execute(
@@ -99,6 +245,22 @@ def add_tags(conn, artefact_id: int, tags: list[str]) -> None:
 
 
 def assign_projects(conn, artefact_id: int, project_ids: list[str]) -> None:
+    """
+    Link an artefact to projects.
+
+    Validates projects exist before linking to avoid dangling references.
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+        project_ids: Project ids to assign.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Reads project table; inserts into artefact_projects with upsert semantics.
+    """
     with conn:
         for project_id in project_ids:
             project = fetchone(conn, "SELECT * FROM projects WHERE id = ?", [project_id])
@@ -118,6 +280,22 @@ def record_event(
     description: Optional[str] = None,
     metadata: Optional[dict] = None,
 ) -> None:
+    """
+    Append an event describing an action on an artefact.
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+        event_type: Short event key (e.g. created, moved, linked).
+        description: Optional human readable context.
+        metadata: Optional structured metadata to JSON-encode.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Inserts into events table.
+    """
     meta_str = json.dumps(metadata) if metadata else None
     with conn:
         conn.execute(
@@ -130,6 +308,20 @@ def record_event(
 
 
 def update_path(conn, artefact_id: int, new_path: str) -> None:
+    """
+    Persist a path change for an artefact.
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+        new_path: New absolute path.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Updates artefacts.path and timestamps.
+    """
     with conn:
         conn.execute(
             "UPDATE artefacts SET path = ?, updated_at = datetime('now') WHERE id = ?",
@@ -138,6 +330,23 @@ def update_path(conn, artefact_id: int, new_path: str) -> None:
 
 
 def update_hash(conn, artefact_id: int, new_hash: str) -> None:
+    """
+    Persist a hash change for an artefact.
+
+    Used when the operator forces a hash overwrite instead of creating a new
+    version.
+
+    Parameters:
+        conn: Database connection.
+        artefact_id: Artefact id.
+        new_hash: New SHA-256 hex digest.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Updates artefacts.hash and timestamps.
+    """
     with conn:
         conn.execute(
             "UPDATE artefacts SET hash = ?, updated_at = datetime('now') WHERE id = ?",
@@ -153,6 +362,22 @@ def create_edge(
     relation_type: str,
     reason: Optional[str] = None,
 ) -> None:
+    """
+    Create a lineage edge between two artefacts.
+
+    Parameters:
+        conn: Database connection.
+        parent_id: Parent artefact id.
+        child_id: Child artefact id.
+        relation_type: Relation label (e.g. derived_from).
+        reason: Optional detail for auditing.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Inserts into edges table.
+    """
     with conn:
         conn.execute(
             """
@@ -164,6 +389,19 @@ def create_edge(
 
 
 def list_parents(conn, child_id: int) -> list[dict]:
+    """
+    List parents of a child artefact, including edge metadata.
+
+    Parameters:
+        conn: Database connection.
+        child_id: Child artefact id.
+
+    Returns:
+        List of parent artefact rows with relation data.
+
+    Side Effects:
+        Database read with join on edges.
+    """
     cur = conn.execute(
         """
         SELECT a.* , e.relation_type, e.reason
@@ -178,6 +416,19 @@ def list_parents(conn, child_id: int) -> list[dict]:
 
 
 def list_children(conn, parent_id: int) -> list[dict]:
+    """
+    List children of a parent artefact, including edge metadata.
+
+    Parameters:
+        conn: Database connection.
+        parent_id: Parent artefact id.
+
+    Returns:
+        List of child artefact rows with relation data.
+
+    Side Effects:
+        Database read with join on edges.
+    """
     cur = conn.execute(
         """
         SELECT a.* , e.relation_type, e.reason
@@ -192,6 +443,21 @@ def list_children(conn, parent_id: int) -> list[dict]:
 
 
 def create_project(conn, project_id: str, name: str, description: Optional[str]) -> dict:
+    """
+    Insert a new project record.
+
+    Parameters:
+        conn: Database connection.
+        project_id: Stable project identifier.
+        name: Human-friendly name.
+        description: Optional description.
+
+    Returns:
+        Project row that was inserted.
+
+    Side Effects:
+        Writes to projects table.
+    """
     with conn:
         conn.execute(
             "INSERT INTO projects (id, name, description) VALUES (?, ?, ?)",
@@ -201,10 +467,36 @@ def create_project(conn, project_id: str, name: str, description: Optional[str])
 
 
 def get_project(conn, project_id: str) -> Optional[dict]:
+    """
+    Fetch a project by id.
+
+    Parameters:
+        conn: Database connection.
+        project_id: Project id.
+
+    Returns:
+        Project row or None.
+
+    Side Effects:
+        Database read.
+    """
     return fetchone(conn, "SELECT * FROM projects WHERE id = ?", [project_id])
 
 
 def list_project_files(conn, project_id: str) -> list[dict]:
+    """
+    List artefacts linked to a project.
+
+    Parameters:
+        conn: Database connection.
+        project_id: Project id.
+
+    Returns:
+        List of artefact rows.
+
+    Side Effects:
+        Database read across artefact_projects join.
+    """
     cur = conn.execute(
         """
         SELECT a.* FROM artefacts a
@@ -225,6 +517,23 @@ def create_version(
     new_path: str,
     description: Optional[str] = None,
 ) -> dict:
+    """
+    Create a new artefact version and link it to its parent.
+
+    Parameters:
+        conn: Database connection.
+        artefact: Parent artefact row.
+        new_hash: Hash of the updated content.
+        new_path: Path of the new version.
+        description: Optional description to carry forward/override.
+
+    Returns:
+        Newly created child artefact row.
+
+    Side Effects:
+        Inserts artefact, edges, events, tags, and project links; updates lineage
+        graph with a derived_from edge.
+    """
     dna = generate_dna_token()
     new_art = create_artefact(
         conn,
