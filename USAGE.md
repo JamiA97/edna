@@ -44,6 +44,13 @@ $ edna tag reports/day1.md --type report --tag baseline
 # Edit the file in an editor, then retag
 $ edna tag reports/day1.md --type report --tag revised
 # Output shows a new DNA token; EDNA linked it to the original as a new version
+
+# Iterating quickly without version spam (work-in-progress mode)
+$ edna tag scripts/cleanup.py --type script --mode wip
+# ...edit and save multiple times...
+$ edna tag scripts/cleanup.py --type script --mode wip
+# When the draft is meaningful again, capture a snapshot
+$ edna tag scripts/cleanup.py --type script --mode snapshot
 ```
 
 Full example: move a file → EDNA updates path:
@@ -92,6 +99,10 @@ $ edna tag reports/day1.md --tag review
 
 # Forcing a hash overwrite (replace content but keep DNA)
 $ edna tag reports/day1.md --force-overwrite --description "hotfix without new version"
+
+# Work-in-progress saves keep the same DNA but log wip events (no new edges)
+$ edna tag reports/day1.md --mode wip
+# --mode wip already updates the current artefact; do not combine with --force-overwrite
 
 # Corrupted sidecar (invalid JSON) → EDNA ignores it and rehydrates from DB/hash
 $ printf '{bad json' > reports/day1.md.edna

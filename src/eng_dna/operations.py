@@ -44,6 +44,7 @@ def tag_file(
     tags: Optional[list[str]],
     project_ids: Optional[list[str]],
     force_overwrite: bool = False,
+    mode: str = "snapshot",
 ) -> dict:
     """
     Tag a file by assigning (or reconciling) a DNA record and metadata.
@@ -63,6 +64,8 @@ def tag_file(
         tags: Optional list of tags to attach.
         project_ids: Optional list of project ids to link.
         force_overwrite: If True, allows overwriting hash instead of versioning.
+        mode: 'snapshot' (default) to create new versions on hash change or
+            'wip' to update the existing artefact in place.
 
     Returns:
         Artefact row representing the tracked item (new or existing/versioned).
@@ -71,6 +74,13 @@ def tag_file(
         Reads file for hashing; may write sidecar; may insert/update DB rows and
         record events.
     """
+    valid_modes = {"snapshot", "wip"}
+    mode_normalised = mode.lower() if mode else "snapshot"
+    if mode_normalised not in valid_modes:
+        raise ValueError(f"Invalid mode '{mode}'. Expected one of {sorted(valid_modes)}.")
+    if mode_normalised == "wip" and force_overwrite:
+        raise ValueError("--force-overwrite cannot be combined with mode='wip'; WIP already updates in place.")
+
     file_path = file_path.expanduser().resolve()
     file_hash = compute_file_hash(file_path)
     identity = read_identity(file_path)
@@ -95,6 +105,7 @@ def tag_file(
             force_overwrite=force_overwrite,
             identity_found=bool(identity),
             command="tag",
+            mode=mode_normalised,
         )
 
     dna_token = generate_dna_token()
@@ -251,6 +262,7 @@ def resolve_file_reference(
         file_hash=file_hash,
         force_overwrite=force_overwrite,
         allow_versioning=allow_versioning,
+        mode="snapshot",
     )
     return updated
 
@@ -264,6 +276,7 @@ def _post_resolve_housekeeping(
     file_hash: str,
     force_overwrite: bool,
     allow_versioning: bool,
+    mode: str,
 ) -> dict:
     """
     Apply reconciliation after resolving a file to an artefact.
@@ -284,6 +297,7 @@ def _post_resolve_housekeeping(
         file_hash: Freshly computed hash.
         force_overwrite: Allow hash overwrite on mismatch.
         allow_versioning: Permit automatic version creation on mismatch.
+        mode: Version handling ('snapshot' or 'wip') when versioning is allowed.
 
     Returns:
         Updated artefact row (possibly new version).
@@ -307,6 +321,7 @@ def _post_resolve_housekeeping(
             file_path,
             file_hash,
             force_overwrite=force_overwrite,
+            mode=mode,
         )
     else:
         write_identity(file_path, artefact["dna_token"], file_hash, artefact.get("type"), artefact["path"])
@@ -334,6 +349,7 @@ def _handle_existing_file(
     force_overwrite: bool,
     identity_found: bool,
     command: str,
+    mode: str,
 ) -> dict:
     """
     Update metadata for a file already tracked by EDNA.
@@ -354,6 +370,7 @@ def _handle_existing_file(
         force_overwrite: Allow hash overwrite when versioning.
         identity_found: True if a sidecar/embedded marker was present.
         command: Name of the invoking command for event logging.
+        mode: 'snapshot' to create versions on hash change or 'wip' to update in place.
 
     Returns:
         Updated artefact row (or new version).
@@ -369,6 +386,7 @@ def _handle_existing_file(
         file_hash=file_hash,
         force_overwrite=force_overwrite,
         allow_versioning=True,
+        mode=mode,
     )
     if artefact_type and artefact.get("type") != artefact_type:
         with conn:
@@ -438,11 +456,13 @@ def _handle_hash_change(
     new_hash: str,
     *,
     force_overwrite: bool,
+    mode: str,
 ) -> dict:
     """
     Respond to a hash mismatch between disk and database.
 
     Decision points:
+        - If mode is 'wip', update the existing record hash and log a wip event.
         - If force_overwrite is True, update the existing record hash and log it.
         - Otherwise, create a new version linked to the parent and emit events.
 
@@ -452,6 +472,7 @@ def _handle_hash_change(
         file_path: Current path for the changed file.
         new_hash: Fresh SHA-256 digest.
         force_overwrite: Whether to bypass versioning.
+        mode: Versioning behaviour selector ('snapshot' or 'wip').
 
     Returns:
         Artefact row representing the updated or new version.
@@ -459,6 +480,30 @@ def _handle_hash_change(
     Side Effects:
         Updates hash or inserts a child artefact; records events; writes sidecar.
     """
+    valid_modes = {"snapshot", "wip"}
+    if mode not in valid_modes:
+        raise ValueError(f"Invalid mode '{mode}'. Expected one of {sorted(valid_modes)}.")
+
+    if mode == "wip":
+        if force_overwrite:
+            raise ValueError("WIP mode cannot be combined with force_overwrite.")
+        artefacts.update_hash(conn, artefact["id"], new_hash)
+        artefacts.record_event(
+            conn,
+            artefact["id"],
+            event_type="wip_saved",
+            metadata={"hash": new_hash},
+        )
+        updated = artefacts.fetch_artefact(conn, artefact["id"])
+        write_identity(
+            file_path,
+            updated["dna_token"],
+            new_hash,
+            updated.get("type"),
+            updated["path"],
+        )
+        return updated
+
     if force_overwrite:
         artefacts.update_hash(conn, artefact["id"], new_hash)
         artefacts.record_event(

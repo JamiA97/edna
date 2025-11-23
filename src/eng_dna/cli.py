@@ -81,6 +81,11 @@ def tag(
     tags: List[str] = typer.Option([], "--tag", help="Add tag (repeatable)"),
     projects: List[str] = typer.Option([], "--project", help="Assign to project"),
     force_overwrite: bool = typer.Option(False, "--force-overwrite", help="Overwrite hash instead of versioning"),
+    mode: str = typer.Option(
+        "snapshot",
+        "--mode",
+        help="Versioning mode: snapshot (new version on hash change) or wip (update in place; incompatible with --force-overwrite)",
+    ),
 ) -> None:
     """
     Tag a file with EDNA metadata and optionally attach tags/projects.
@@ -95,6 +100,7 @@ def tag(
         tags: Repeated tag options.
         projects: Repeated project identifiers.
         force_overwrite: Overwrite stored hash instead of creating a version.
+        mode: Versioning mode ('snapshot' or 'wip').
 
     Returns:
         None.
@@ -102,6 +108,11 @@ def tag(
     Side Effects:
         May write sidecar, create/update DB records, and emit events.
     """
+    mode_opt = mode.lower() if mode else "snapshot"
+    if mode_opt not in {"snapshot", "wip"}:
+        raise typer.BadParameter("Invalid --mode. Choose 'snapshot' or 'wip'.")
+    if mode_opt == "wip" and force_overwrite:
+        raise typer.BadParameter("--mode wip cannot be combined with --force-overwrite.")
     with _db() as conn:
         result = operations.tag_file(
             conn,
@@ -111,6 +122,7 @@ def tag(
             tags=list(tags) or None,
             project_ids=list(projects) or None,
             force_overwrite=force_overwrite,
+            mode=mode_opt,
         )
         _print_brief(result)
 
