@@ -9,6 +9,12 @@ EDNA is a CLI for tracking the lineage of engineering artefacts (CAD, code, repo
 - Practical workflows: tag files, link derivations, browse projects, render graphs, and export/import bundles.
 - Safety: avoids modifying source content; metadata lives beside files.
 
+## EDNA – Engineering Design DNA
+
+For full project details, documentation, and examples, visit the EDNA webpage:
+
+[Project Website](https://jamia97.github.io/edna/)
+
 ## Installation
 
 ```bash
