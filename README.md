@@ -5,7 +5,7 @@ EDNA is a CLI for tracking the lineage of engineering artefacts (CAD, code, repo
 ## Why EDNA?
 
 - Audit-ready lineage: every derived artefact keeps an immutable DNA token with recorded parent links.
-- Lightweight + local-first: SQLite database, optional sidecar files, zero external services.
+- Lightweight + local-first: SQLite database + `.edna` sidecars; zero external services.
 - Practical workflows: tag files, link derivations, browse projects, render graphs, and export/import bundles.
 - Safety: avoids modifying source content; metadata lives beside files.
 
@@ -66,12 +66,13 @@ edna import edna_lineage_demo.json
 ## Core concepts
 
 - **DNA token**: stable identifier for a file version; changes when content changes.
-- **Sidecar**: optional `.edna` file beside artefacts to mirror DB metadata.
+- **Sidecar**: `.edna` file beside each tracked artefact that mirrors DB metadata. EDNA always uses sidecars by default and never embeds metadata into your source files.
 - **Lineage edges**: parent → child links with relation and optional reason.
 - **Projects/Tags**: lightweight grouping and filtering.
 
 ## Commands (overview)
 
+- `edna --version` — show the installed EDNA version.
 - `edna init [--path DIR]` — create or reuse `eng_dna.db`.
 - `edna tag FILE [--type ...] [-d ...] [--tag ...] [--project ...] [--mode snapshot|wip]`
 - `edna show TARGET` — display metadata for a file or DNA token.
@@ -127,10 +128,19 @@ edna graph  results/rotor_v3_run001_surface.csv --scope full --direction LR --vi
 
 ## Philosophy & safety notes
 
-- Metadata lives outside content; EDNA won’t rewrite your artefacts.
+**Safe to try:** EDNA never modifies your actual artefact contents. It stores all metadata in a SQLite database and `.edna` sidecar files alongside your existing files.
+
+- Metadata lives outside content; EDNA writes SQLite + `.edna` sidecars and won’t rewrite your artefacts.
 - Lineage is explicit: links are created by you, never inferred silently.
 - Sidecars are recoverable from the DB; corrupt sidecars are ignored and repaired.
 - Browser graph view uses Mermaid from a public CDN; offline use still works via Mermaid/DOT text output.
+
+## Troubleshooting (quick)
+
+- **File moved?** Run `edna rescan .` in the project root to reconcile paths and sidecars.
+- **Graph not rendering?** Use `edna graph <file> --format mermaid > graph.mmd` and render it with your own Mermaid or Graphviz toolchain. If you use `--view`, ensure you have internet access for the Mermaid CDN.
+- **Sidecar looks corrupted or missing?** EDNA reads from the SQLite DB as the source of truth. Re-running `edna show` or `edna rescan .` will restore sidecar metadata where possible.
+- **New content not recognised?** If you overwrite a file with new content, run `edna tag <file>` again. EDNA will either create a new version or update according to your chosen mode (`snapshot`/`wip`).
 
 ## FAQ (short)
 

@@ -7,7 +7,7 @@ name = "eng-dna"
 version = "0.1.0"
 description = "Engineering Memory / Design Lineage CLI"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 authors = [{name = "Eng DNA"}]
 dependencies = [
     "typer>=0.9",

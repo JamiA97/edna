@@ -14,10 +14,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, List
 
-import typer
 import click
+import typer
 
-from . import artefacts, operations, sync
+from . import __version__, artefacts, operations, sync
 from .db import connect, ensure_schema, init_db, resolve_db_path
 
 app = typer.Typer(help="Engineering Memory / Design Lineage CLI")
@@ -70,8 +70,26 @@ def _wrap_mermaid_html(mermaid_code: str) -> str:
 """
 
 
+def _version_callback(value: bool) -> None:
+    """Eagerly print version when requested."""
+    if value:
+        typer.echo(f"edna {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
-def main(ctx: typer.Context, db: Optional[Path] = typer.Option(None, help="Path to eng_dna.db")) -> None:
+def main(
+    ctx: typer.Context,
+    db: Optional[Path] = typer.Option(None, help="Path to eng_dna.db"),
+    version: Optional[bool] = typer.Option(
+        None,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed EDNA version and exit.",
+    ),
+) -> None:
     """
     Configure shared CLI context.
 
