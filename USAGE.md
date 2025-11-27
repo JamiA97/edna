@@ -177,6 +177,8 @@ $ edna trace results/new.csv
 $ edna graph results/new.csv > lineage.mmd              # Mermaid (default)
 $ edna graph results/new.csv --format dot --scope full \\
     --direction LR > lineage.dot                       # Graphviz DOT
+$ edna graph results/new.csv --scope full --direction LR --view
+    # Opens an interactive Mermaid view in your browser
 
 # Export/import lineage bundles (portable JSON)
 $ edna export --project demo --output edna_lineage_demo.json
@@ -208,5 +210,7 @@ $ edna rescan ./workspace
   Embedded markers would modify source files and skew hashes; EDNA keeps EMBED_ENABLED=False until hashing can ignore the marker or use canonical content.
 - How does EDNA behave when files are moved?  
   On show/tag/rescan, EDNA normalises the new path, updates the database, rewrites the sidecar, and logs a `moved` event without changing the DNA.
+- How do I quickly see the lineage graph?  
+  Use `edna graph <file> --view` to generate a temporary HTML file with a Mermaid diagram and open it in your default browser. By default this uses an online Mermaid.js CDN, so you need basic internet access for the rendering script to load.
 - How does EDNA detect versions?  
   A hash mismatch triggers versioning unless `--force-overwrite` is provided; the new artefact gets its own DNA and a derived_from edge back to the previous one.

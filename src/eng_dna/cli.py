@@ -8,6 +8,8 @@ trigger (tagging, lineage, export/import).
 from __future__ import annotations
 
 import json
+import tempfile
+import webbrowser
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, List
@@ -21,6 +23,51 @@ from .db import connect, ensure_schema, init_db, resolve_db_path
 app = typer.Typer(help="Engineering Memory / Design Lineage CLI")
 project_app = typer.Typer(help="Project management commands")
 app.add_typer(project_app, name="project")
+
+
+def _wrap_mermaid_html(mermaid_code: str) -> str:
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>EDNA Lineage Graph</title>
+  <style>
+    html, body {{
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      background: #111;
+      color: #eee;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    .container {{
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      padding: 1rem;
+    }}
+    pre.mermaid {{
+      margin: 0;
+      width: 100%;
+      height: 100%;
+    }}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({{ startOnLoad: true, securityLevel: "loose" }});
+  </script>
+</head>
+<body>
+  <div class="container">
+    <pre class="mermaid">
+{mermaid_code}
+    </pre>
+  </div>
+</body>
+</html>
+"""
 
 
 @app.callback()
@@ -254,6 +301,7 @@ def graph(
     fmt: str = typer.Option("mermaid", "--format", "-f", help="Output format: mermaid or dot"),
     scope: str = typer.Option("ancestors", "--scope", help="Scope: ancestors, descendants, or full"),
     direction: str = typer.Option("TB", "--direction", help="Graph direction: TB or LR"),
+    view: bool = typer.Option(False, "--view", help="Open graph in a browser"),
 ) -> None:
     """
     Render a lineage graph rooted at a target artefact.
@@ -263,6 +311,7 @@ def graph(
         fmt: Output format ('mermaid' or 'dot').
         scope: Graph scope (ancestors/descendants/full).
         direction: Graph layout direction.
+        view: Whether to open a rendered Mermaid graph in the browser.
 
     Returns:
         None.
@@ -279,10 +328,23 @@ def graph(
     direction_opt = direction.upper()
     if direction_opt not in {"TB", "LR"}:
         raise typer.BadParameter("Invalid --direction. Choose 'TB' or 'LR'.")
+    if view and format_opt != "mermaid":
+        raise typer.BadParameter("--view currently requires --format mermaid")
 
     with _db() as conn:
         artefact, _ = operations.resolve_target(conn, target)
         nodes, edges = operations.build_lineage_graph(conn, artefact, scope=scope_opt)
+        if view:
+            mermaid_code = operations.format_lineage_as_mermaid(
+                nodes, edges, direction=direction_opt
+            )
+            html = _wrap_mermaid_html(mermaid_code)
+            with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as fh:
+                fh.write(html)
+                temp_path = Path(fh.name)
+            webbrowser.open(temp_path.as_uri())
+            typer.echo(f"Opened lineage graph in browser: {temp_path}")
+            return
         if format_opt == "mermaid":
             output = operations.format_lineage_as_mermaid(nodes, edges, direction=direction_opt)
         else:
