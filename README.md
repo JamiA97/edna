@@ -15,6 +15,8 @@ For full project details, documentation, and examples, visit the EDNA webpage:
 
 [Project Website](https://jamia97.github.io/edna/)
 
+Email: [edna.dev.tool@gmail.com](mailto:edna.dev.tool@gmail.com)
+
 ## Installation
 
 ```bash
