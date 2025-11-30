@@ -74,13 +74,41 @@ def test_formatters() -> None:
         operations.LineageEdge(parent_id=1, child_id=2, relation_type="derived_from", reason=None),
     ]
 
-    mermaid = operations.format_lineage_as_mermaid(nodes, edges, direction="LR")
+    mermaid = operations.format_lineage_as_mermaid(nodes, edges, target_id=2)
     assert "flowchart LR" in mermaid
-    assert 'n_1["abcd1234 | script | setup.py"]' in mermaid
-    assert "n_1 -->|derived_from| n_2" in mermaid
+    assert 'n_1["setup.py\n[script]\nID: abcd1234"]' in mermaid
+    assert "classDef geometry" in mermaid  # class definitions emitted once
+    assert "class n_2 default" in mermaid
+    assert "class n_2 target" in mermaid
+    assert "n_1 --> n_2" in mermaid
+    assert "derived_from" not in mermaid
 
     dot = operations.format_lineage_as_dot(nodes, edges, direction="TB")
     assert dot.startswith("digraph edna_lineage")
     assert "rankdir=TB" in dot
-    assert 'n_1 [label="abcd1234 | script | setup.py"];' in dot
+    assert 'n_1 [label="setup.py\n[script]\nID: abcd1234"];' in dot
     assert 'n_1 -> n_2 [label="derived_from"];' in dot
+
+
+def test_format_node_label_helper() -> None:
+    label = operations.format_node_label("file_A.geom", "geometry", "6cd720a7")
+    assert label == "file_A.geom\n[geometry]\nID: 6cd720a7"
+
+
+def test_node_type_to_class_mapping() -> None:
+    assert operations.node_type_to_mermaid_class("geometry") == "geometry"
+    assert operations.node_type_to_mermaid_class("MESH") == "mesh"
+    assert operations.node_type_to_mermaid_class("results") == "results"
+    assert operations.node_type_to_mermaid_class("script") == "default"
+    assert operations.node_type_to_mermaid_class(None) == "default"
+
+
+def test_direction_defaults_to_lr() -> None:
+    nodes = {
+        1: operations.LineageNode(id=1, dna_token="edna_12345678", path="/tmp/a", type=None),
+    }
+    edges: list[operations.LineageEdge] = []
+    mermaid = operations.format_lineage_as_mermaid(nodes, edges, direction="BOGUS")
+    dot = operations.format_lineage_as_dot(nodes, edges, direction="BOGUS")
+    assert "flowchart LR" in mermaid
+    assert "rankdir=LR" in dot

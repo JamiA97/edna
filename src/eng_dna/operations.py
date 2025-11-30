@@ -35,6 +35,14 @@ class LineageEdge:
     reason: Optional[str]
 
 
+TYPE_TO_CLASS = {
+    "geometry": "geometry",
+    "mesh": "mesh",
+    "results": "results",
+}
+MERMAID_DIRECTION_DEFAULT = "LR"
+
+
 def tag_file(
     conn,
     file_path: Path,
@@ -897,7 +905,8 @@ def format_lineage_as_mermaid(
     nodes: dict[int, LineageNode],
     edges: list[LineageEdge],
     *,
-    direction: str = "TB",
+    direction: str = MERMAID_DIRECTION_DEFAULT,
+    target_id: Optional[int] = None,
 ) -> str:
     """
     Render a lineage graph as Mermaid flowchart markup.
@@ -905,7 +914,8 @@ def format_lineage_as_mermaid(
     Parameters:
         nodes: Mapping of artefact id to LineageNode.
         edges: List of LineageEdge objects.
-        direction: Flow direction ('TB' or 'LR').
+        direction: Flow direction ('TB' or 'LR'); defaults to left-to-right.
+        target_id: Optional node id to highlight as the selected target.
 
     Returns:
         Mermaid flowchart string.
@@ -913,18 +923,19 @@ def format_lineage_as_mermaid(
     Side Effects:
         None.
     """
-    direction = direction if direction in {"TB", "LR"} else "TB"
-    lines = [f"flowchart {direction}"]
+    direction = _normalize_direction(direction, default=MERMAID_DIRECTION_DEFAULT)
+    lines = [f"flowchart {direction}", *_mermaid_class_definitions()]
     for artefact_id in sorted(nodes):
         node = nodes[artefact_id]
         label = _format_node_label(node)
         lines.append(f'    n_{node.id}["{_escape_mermaid(label)}"]')
+    for node in sorted(nodes.values(), key=lambda n: n.id):
+        type_class = node_type_to_mermaid_class(node.type)
+        lines.append(f"    class n_{node.id} {type_class}")
+        if target_id is not None and node.id == target_id:
+            lines.append(f"    class n_{node.id} target")
     for edge in sorted(edges, key=lambda e: (e.parent_id, e.child_id, e.relation_type or "")):
-        label = ""
-        if edge.relation_type:
-            relation_text = edge.relation_type.replace("|", "\\|")
-            label = f"|{relation_text}|"
-        lines.append(f"    n_{edge.parent_id} -->{label} n_{edge.child_id}")
+        lines.append(f"    n_{edge.parent_id} --> n_{edge.child_id}")
     return "\n".join(lines)
 
 
@@ -932,7 +943,7 @@ def format_lineage_as_dot(
     nodes: dict[int, LineageNode],
     edges: list[LineageEdge],
     *,
-    direction: str = "TB",
+    direction: str = MERMAID_DIRECTION_DEFAULT,
 ) -> str:
     """
     Render a lineage graph as Graphviz DOT.
@@ -940,7 +951,7 @@ def format_lineage_as_dot(
     Parameters:
         nodes: Mapping of artefact id to LineageNode.
         edges: List of LineageEdge objects.
-        direction: Rank direction ('TB' or 'LR').
+        direction: Rank direction ('TB' or 'LR'); defaults to left-to-right.
 
     Returns:
         DOT source string.
@@ -948,7 +959,7 @@ def format_lineage_as_dot(
     Side Effects:
         None.
     """
-    direction = direction if direction in {"TB", "LR"} else "TB"
+    direction = _normalize_direction(direction, default=MERMAID_DIRECTION_DEFAULT)
     lines = ["digraph edna_lineage {", f"    rankdir={direction};"]
     for artefact_id in sorted(nodes):
         node = nodes[artefact_id]
@@ -976,13 +987,11 @@ def _format_node_label(node: LineageNode) -> str:
     Side Effects:
         None.
     """
-    token = node.dna_token or ""
-    short = token[5:] if token.startswith("edna_") else token
-    short = short[:8] or token[:8] or "unknown"
     artefact_type = node.type or "n/a"
     basename = Path(node.path).name if node.path else ""
     basename = basename or node.path or "n/a"
-    return f"{short} | {artefact_type} | {basename}"
+    dna_short = _shorten_dna_token(node.dna_token or "")
+    return format_node_label(basename, artefact_type, dna_short)
 
 
 def _escape_mermaid(text: str) -> str:
@@ -993,3 +1002,65 @@ def _escape_mermaid(text: str) -> str:
 def _escape_dot(text: str) -> str:
     """Escape text for safe inclusion in DOT labels."""
     return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def format_node_label(filename: str, type_: Optional[str], dna_short: str) -> str:
+    """
+    Render a readable, multi-line label for graph nodes.
+
+    Parameters:
+        filename: Display name for the artefact (typically basename).
+        type_: Optional artefact type to show in brackets.
+        dna_short: Short DNA identifier to show on the ID line.
+
+    Returns:
+        String with newline separators suitable for Mermaid/DOT labels.
+    """
+    safe_name = filename or "n/a"
+    type_label = type_ or "n/a"
+    parts = [safe_name, f"[{type_label}]"]
+    if dna_short:
+        parts.append(f"ID: {dna_short}")
+    return "\n".join(parts)
+
+
+def node_type_to_mermaid_class(type_: Optional[str]) -> str:
+    """
+    Map an artefact type to a Mermaid class for styling.
+
+    Parameters:
+        type_: Optional artefact type string.
+
+    Returns:
+        Mermaid class name (geometry/mesh/results/default).
+    """
+    if not type_:
+        return "default"
+    return TYPE_TO_CLASS.get(type_.lower(), "default")
+
+
+def _shorten_dna_token(token: str) -> str:
+    """Return a compact DNA token for display."""
+    trimmed = token[5:] if token.startswith("edna_") else token
+    trimmed = trimmed or token
+    short = trimmed[:8] or token[:8]
+    return short or "unknown"
+
+
+def _normalize_direction(direction: Optional[str], *, default: str) -> str:
+    """Validate graph direction, falling back to a default when unknown."""
+    valid = {"TB", "LR"}
+    if direction and direction in valid:
+        return direction
+    return default
+
+
+def _mermaid_class_definitions() -> list[str]:
+    """Static classDef styles for Mermaid output."""
+    return [
+        "    classDef default fill:#f8fafc,stroke:#1f2937,stroke-width:1.2px,color:#0f172a,rx:8px,ry:8px;",
+        "    classDef geometry fill:#e0ecff,stroke:#1d4ed8,stroke-width:1.5px,color:#0b1b34,rx:8px,ry:8px;",
+        "    classDef mesh fill:#fff4e5,stroke:#c2410c,stroke-width:1.5px,color:#7c2d12,rx:8px,ry:8px;",
+        "    classDef results fill:#e7f9ef,stroke:#15803d,stroke-width:1.5px,color:#064e2e,rx:8px,ry:8px;",
+        "    classDef target stroke:#0f172a,stroke-width:2.2px;",
+    ]

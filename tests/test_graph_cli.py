@@ -41,7 +41,7 @@ def test_graph_cli_mermaid(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("EDNA_DB_PATH", str(db_path))
     result = runner.invoke(app, ["graph", str(child_path)])
     assert result.exit_code == 0, result.stdout
-    assert "flowchart" in result.stdout
+    assert "flowchart LR" in result.stdout
 
 
 def test_unlink_cli(tmp_path, monkeypatch) -> None:

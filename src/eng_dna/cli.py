@@ -25,33 +25,112 @@ project_app = typer.Typer(help="Project management commands")
 app.add_typer(project_app, name="project")
 
 
-def _wrap_mermaid_html(mermaid_code: str) -> str:
+def _wrap_mermaid_html(mermaid_code: str, target_label: str) -> str:
     return f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <title>EDNA Lineage Graph</title>
   <style>
+    :root {{
+      color-scheme: light;
+    }}
     html, body {{
       margin: 0;
       padding: 0;
       width: 100%;
       height: 100%;
-      overflow: auto;
-      background: #111;
-      color: #eee;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f7fb;
+      color: #0f172a;
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.5;
     }}
-    .container {{
+    .page {{
       box-sizing: border-box;
-      width: 100%;
-      height: 100%;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }}
+    .title {{
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin: 0;
+      color: #0f172a;
+    }}
+    .subtitle {{
+      margin: 0.1rem 0 1rem;
+      color: #475569;
+      font-size: 0.95rem;
+    }}
+    .graph {{
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
       padding: 1rem;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      overflow-x: auto;
     }}
     pre.mermaid {{
       margin: 0;
-      width: 100%;
-      height: 100%;
+      background: transparent;
+    }}
+    .legend {{
+      margin-top: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      align-items: center;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 0.75rem 1rem;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+      color: #334155;
+      font-size: 0.95rem;
+    }}
+    .legend .label {{
+      font-weight: 700;
+      color: #0f172a;
+      margin-right: 0.5rem;
+    }}
+    .legend-item {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      white-space: nowrap;
+    }}
+    .swatch {{
+      width: 14px;
+      height: 14px;
+      border-radius: 5px;
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.15);
+    }}
+    .swatch.geometry {{
+      background: #e0ecff;
+      border-color: #1d4ed8;
+    }}
+    .swatch.mesh {{
+      background: #fff4e5;
+      border-color: #c2410c;
+    }}
+    .swatch.results {{
+      background: #e7f9ef;
+      border-color: #15803d;
+    }}
+    .swatch.default {{
+      background: #f8fafc;
+      border-color: #1f2937;
+    }}
+    .swatch.target {{
+      background: transparent;
+      border: 2px solid #0f172a;
+      width: 16px;
+      height: 16px;
+    }}
+    .arrow {{
+      font-weight: 700;
+      color: #0f172a;
     }}
   </style>
   <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
@@ -60,10 +139,23 @@ def _wrap_mermaid_html(mermaid_code: str) -> str:
   </script>
 </head>
 <body>
-  <div class="container">
-    <pre class="mermaid">
+  <div class="page">
+    <div class="title">EDNA Lineage</div>
+    <div class="subtitle">Target: {target_label}</div>
+    <div class="graph">
+      <pre class="mermaid">
 {mermaid_code}
-    </pre>
+      </pre>
+    </div>
+    <div class="legend">
+      <div class="label">Legend:</div>
+      <div class="legend-item"><span class="arrow">→</span> derived_from</div>
+      <div class="legend-item"><span class="swatch geometry"></span> geometry</div>
+      <div class="legend-item"><span class="swatch mesh"></span> mesh</div>
+      <div class="legend-item"><span class="swatch results"></span> results</div>
+      <div class="legend-item"><span class="swatch default"></span> other</div>
+      <div class="legend-item"><span class="swatch target"></span> selected target</div>
+    </div>
   </div>
 </body>
 </html>
@@ -318,7 +410,11 @@ def graph(
     target: str = typer.Argument(..., help="File path or DNA token"),
     fmt: str = typer.Option("mermaid", "--format", "-f", help="Output format: mermaid or dot"),
     scope: str = typer.Option("ancestors", "--scope", help="Scope: ancestors, descendants, or full"),
-    direction: str = typer.Option("TB", "--direction", help="Graph direction: TB or LR"),
+    direction: str = typer.Option(
+        operations.MERMAID_DIRECTION_DEFAULT,
+        "--direction",
+        help="Graph direction: TB or LR (default LR)",
+    ),
     view: bool = typer.Option(False, "--view", help="Open graph in a browser"),
 ) -> None:
     """
@@ -352,11 +448,12 @@ def graph(
     with _db() as conn:
         artefact, _ = operations.resolve_target(conn, target)
         nodes, edges = operations.build_lineage_graph(conn, artefact, scope=scope_opt)
+        target_label = Path(artefact["path"]).name if artefact.get("path") else artefact.get("dna_token", "unknown")
         if view:
             mermaid_code = operations.format_lineage_as_mermaid(
-                nodes, edges, direction=direction_opt
+                nodes, edges, direction=direction_opt, target_id=artefact["id"]
             )
-            html = _wrap_mermaid_html(mermaid_code)
+            html = _wrap_mermaid_html(mermaid_code, target_label)
             with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as fh:
                 fh.write(html)
                 temp_path = Path(fh.name)
@@ -364,7 +461,9 @@ def graph(
             typer.echo(f"Opened lineage graph in browser: {temp_path}")
             return
         if format_opt == "mermaid":
-            output = operations.format_lineage_as_mermaid(nodes, edges, direction=direction_opt)
+            output = operations.format_lineage_as_mermaid(
+                nodes, edges, direction=direction_opt, target_id=artefact["id"]
+            )
         else:
             output = operations.format_lineage_as_dot(nodes, edges, direction=direction_opt)
         typer.echo(output)

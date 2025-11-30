@@ -180,6 +180,25 @@ $ edna graph results/new.csv --format dot --scope full \\
 $ edna graph results/new.csv --scope full --direction LR --view
     # Opens an interactive Mermaid view in your browser
 
+Mermaid output stays readable in Markdown. Example for a simple CAD → mesh → results chain:
+
+```mermaid
+flowchart LR
+    classDef default fill:#f8fafc,stroke:#1f2937,stroke-width:1.2px,color:#0f172a,rx:8px,ry:8px;
+    classDef geometry fill:#e0ecff,stroke:#1d4ed8,stroke-width:1.5px,color:#0b1b34,rx:8px,ry:8px;
+    classDef mesh fill:#fff4e5,stroke:#c2410c,stroke-width:1.5px,color:#7c2d12,rx:8px,ry:8px;
+    classDef results fill:#e7f9ef,stroke:#15803d,stroke-width:1.5px,color:#064e2e,rx:8px,ry:8px;
+    classDef target stroke:#0f172a,stroke-width:2.2px;
+    n_1["wing.sldprt\n[geometry]\nID: aa11bb22"]
+    n_2["wing_mesh.fem\n[mesh]\nID: bb22cc33"]
+    n_3["wing_results.csv\n[results]\nID: cc33dd44"]
+    n_1 --> n_2
+    n_2 --> n_3
+    class n_1 geometry target
+    class n_2 mesh
+    class n_3 results
+```
+
 # Export/import lineage bundles (portable JSON)
 $ edna export --project demo --output edna_lineage_demo.json
 $ edna import edna_lineage_demo.json --dry-run
